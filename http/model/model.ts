@@ -1,40 +1,54 @@
 import mongoose, { Types } from "mongoose";
 
 interface IUser {
-    name : String,
-    email : String,
-    password :  String,
-    enum : []
+    name: string;
+    email: string;
+    password: string;
+    role: "Student" | "Teacher";
 }
 const UserSchema = new mongoose.Schema<IUser>({
-    name: String,
-    email : { type : String , unique : true },
-    password : String,
-    enum : ["Student" , "Teacher"]
+    name: { type: String, required: true },
+    email: { type: String, unique: true, required: true },
+    password: { type: String, required: true },
+    role: { type: String, enum: ["Student", "Teacher"], required: true }
 })
 
-const ClassSchema = new mongoose.Schema({
-    className : String,
-    teacherId : {
+interface IClass {
+    className: string;
+    teacherId: Types.ObjectId;
+    StudentId: Types.ObjectId[];
+}
+const ClassSchema = new mongoose.Schema<IClass>({
+    className: { type: String, required: true },
+    teacherId: {
         type: mongoose.Types.ObjectId,
-        ref : "UserModel",
+        ref: "UserModel",
+        required: true,
     },
     StudentId: [{
-        type : mongoose.Types.ObjectId,
-        ref : "UserModel",
+        type: mongoose.Types.ObjectId,
+        ref: "UserModel",
+        required: true,
     }]
 })
 
-const AttendanceSchema = new mongoose.Schema({
-    classId  : {
-        type : mongoose.Types.ObjectId,
-        ref : "ClassModel",
+interface IAttendance {
+    status: "present" | "absent";
+    classId: Types.ObjectId;
+    studentId: Types.ObjectId;
+}
+const AttendanceSchema = new mongoose.Schema<IAttendance>({
+    status: { type: String, enum: ["present", "absent"], required: true },
+    classId: {
+        type: mongoose.Types.ObjectId,
+        ref: "ClassModel",
+        required: true,
     },
-    studentId : {
-        type : mongoose.Types.ObjectId,
-        ref : "UserModel",
+    studentId: {
+        type: mongoose.Types.ObjectId,
+        ref: "UserModel",
+        required: true,
     },
-    enum : ["present","absent"],
 })
 
 export const AttendanceModel = mongoose.model("AttendanceModel",AttendanceSchema);
