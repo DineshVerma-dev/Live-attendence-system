@@ -4,19 +4,19 @@ interface IUser {
     name: string;
     email: string;
     password: string;
-    role: "Student" | "Teacher";
+    role: "teacher" | "student";
 }
 const UserSchema = new mongoose.Schema<IUser>({
     name: { type: String, required: true },
     email: { type: String, unique: true, required: true },
     password: { type: String, required: true },
-    role: { type: String, enum: ["Student", "Teacher"], required: true }
-})
+    role: { type: String, enum: ["teacher", "student"], required: true }
+});
 
 interface IClass {
     className: string;
     teacherId: Types.ObjectId;
-    StudentId: Types.ObjectId[];
+    studentIds: Types.ObjectId[];
 }
 const ClassSchema = new mongoose.Schema<IClass>({
     className: { type: String, required: true },
@@ -25,12 +25,12 @@ const ClassSchema = new mongoose.Schema<IClass>({
         ref: "UserModel",
         required: true,
     },
-    StudentId: [{
+    studentIds: [{
         type: mongoose.Types.ObjectId,
         ref: "UserModel",
         required: true,
     }]
-})
+});
 
 interface IAttendance {
     status: "present" | "absent";
@@ -49,8 +49,10 @@ const AttendanceSchema = new mongoose.Schema<IAttendance>({
         ref: "UserModel",
         required: true,
     },
-})
+});
 
-export const AttendanceModel = mongoose.model("AttendanceModel",AttendanceSchema);
-export const ClassModel = mongoose.model("ClassModel",ClassSchema);
+AttendanceSchema.index({ classId: 1, studentId: 1 }, { unique: true });
+
+export const AttendanceModel = mongoose.model("AttendanceModel", AttendanceSchema);
+export const ClassModel = mongoose.model("ClassModel", ClassSchema);
 export const UserModel = mongoose.model("UserModel", UserSchema);
