@@ -1,21 +1,23 @@
 import express from "express";
-import { SigninSchema, SignupSchema, CreateClassSchema, AddStudentSchema } from "./zod/types";
+import { SigninSchema, SignupSchema, CreateClassSchema, AddStudentSchema, AttendenceStartSchema } from "./zod/types";
 import { AttendanceModel, ClassModel, UserModel } from "./model/model";
 import * as jwt from "jsonwebtoken";
 import { Middleware } from "./middleware/middleware";
 import { TeacherMiddleware } from "./middleware/TeacherMiddleware";
 import { Types } from "mongoose";
 
+
+
 const app = express();
 app.use(express.json());
 const PORT = 5000;
-
+let activeSession: { classId: string; startedAt: Date; attendance: Record<string, string> } | null = null;
 const JWT_SECRET = process.env.JWT_SECRET || "dev_jwt_secret_change_me";
 
 app.post("/auth/signup", async (req, res) => {
     const { success, data } = SignupSchema.safeParse(req.body);
     if (!success) {
-        return res.sendStatus(400).json({
+        return res.status(400).json({
             "success": false,
             "error": "Invalid request schema",
         })
@@ -26,7 +28,7 @@ app.post("/auth/signup", async (req, res) => {
     })
 
     if (user) {
-        return res.sendStatus(400).json({
+        return res.status(400).json({
             "success": false,
             "error": "Email already exists"
         })
@@ -53,7 +55,7 @@ app.post("/auth/signup", async (req, res) => {
 app.post("/auth/login", async (req, res) => {
     const { success, data } = SigninSchema.safeParse(req.body);
     if (!success) {
-        return res.sendStatus(400).json({
+        return res.status(400).json({
             "success": false,
             "error": "Invalid request schema",
         })
@@ -63,7 +65,7 @@ app.post("/auth/login", async (req, res) => {
         email: data.email,
     })
     if (!userdb || userdb.password != data.password) {
-        return res.sendStatus(400).json({
+        return res.status(400).json({
             "success": false,
             "error": "Invalid email or password"
         })
@@ -87,12 +89,10 @@ app.post("/auth/login", async (req, res) => {
 })
 
 app.post("/auth/me", Middleware, async (req, res) => {
-    const userdb = await UserModel.findById({
-        _id: req.userId
-    })
+    const userdb = await UserModel.findById(req.userId);
     if (!userdb) {
-        res.sendStatus(401).json({
-            "message": "contol shouldnt reach in /auth/me route"
+        return res.status(401).json({
+            "message": "control shouldn't reach in /auth/me route"
         })
     }
     return res.json({
@@ -125,19 +125,19 @@ app.post("/class", Middleware, TeacherMiddleware, async (req, res) => {
     return res.json({
         "success": true,
         "data": {
-            "_id" : classdb._id,
-            "className" : classdb.className,
-            "teacherId" : classdb.teacherId,
+            "_id": classdb._id,
+            "className": classdb.className,
+            "teacherId": classdb.teacherId,
         }
     })
 })
 
-app.post("/class/:id/add-student" , Middleware , TeacherMiddleware , async (req,res) => {
-   const { success ,data} = AddStudentSchema.safeParse(req.body) ;
-    if(!success){
+app.post("/class/:id/add-student", Middleware, TeacherMiddleware, async (req, res) => {
+    const { success, data } = AddStudentSchema.safeParse(req.body);
+    if (!success) {
         return res.status(400).json({
-             "success" : false,
-             "error" : "Invalid request schema"
+            "success": false,
+            "error": "Invalid request schema"
         });
     }
 
@@ -150,47 +150,47 @@ app.post("/class/:id/add-student" , Middleware , TeacherMiddleware , async (req,
     }
 
     const classdb = await ClassModel.findOne({
-        _id : req.params.id,
+        _id: req.params.id,
     })
-    if(!classdb) {
-       return res.status(400).json({
-            "success" : false,
-            "error" : "class not found"
+    if (!classdb) {
+        return res.status(400).json({
+            "success": false,
+            "error": "class not found"
         })
     }
 
     const userdb = await UserModel.findOne({
-         _id : studentId,
+        _id: studentId,
     })
-    if(!userdb){
+    if (!userdb) {
         return res.status(400).json({
-            "success" : false,
-            "error" : "Student not found",
+            "success": false,
+            "error": "Student not found",
         })
     }
 
     classdb.StudentId.push(new Types.ObjectId(studentId));
     await classdb.save();
     return res.json({
-        "success" : true,
-        "data" : {
-            "_id" : classdb._id,
-            "className" : classdb.className,
-            teacherId : classdb.teacherId,
-            "studentId" : classdb.StudentId,
+        "success": true,
+        "data": {
+            "_id": classdb._id,
+            "className": classdb.className,
+            teacherId: classdb.teacherId,
+            "studentId": classdb.StudentId,
         }
     })
 })
 
-app.get("/class/:id" ,Middleware  , async (req,res) => {
+app.get("/class/:id", Middleware, async (req, res) => {
     const classdb = await ClassModel.findOne({
-    _id : req.params.id
-    }) 
-    if(!classdb) {
-     return res.status(400).json({
-       "success"  :false,
-       "error" : "Class doesnt exists",
+        _id: req.params.id
     })
+    if (!classdb) {
+        return res.status(400).json({
+            "success": false,
+            "error": "Class doesnt exists",
+        })
     }
 
     if (!req.userId || !Types.ObjectId.isValid(req.userId as string)) {
@@ -207,8 +207,8 @@ app.get("/class/:id" ,Middleware  , async (req,res) => {
 
     if (!isTeacher && !isStudent) {
         return res.status(403).json({
-            "success" : false,
-            "error" : "Forbidden"
+            "success": false,
+            "error": "Forbidden"
         })
     }
 
@@ -223,48 +223,104 @@ app.get("/class/:id" ,Middleware  , async (req,res) => {
     })
 })
 
-app.get("/students", Middleware, TeacherMiddleware ,async(req,res) => {
-   const users = UserModel.find({
-    role : "student",
-   })
-   res.json({
-    "success" : true,
-    "data" : (await users).map(u => ({
-        _id : u._id,
-        name : u.name,
-        email:u.email
-    }))
-   })
+app.get("/students", Middleware, TeacherMiddleware, async (req, res) => {
+    const users = UserModel.find({
+        role: "student",
+    })
+    res.json({
+        "success": true,
+        "data": (await users).map(u => ({
+            _id: u._id,
+            name: u.name,
+            email: u.email
+        }))
+    })
 })
 
-app.get("/class/:id/my-attendance",Middleware , async (require,res)=>{
-    const classId = require.params.id;
-    const userId = require.userId;
+app.get("/class/:id/my-attendance", Middleware, async (req, res) => {
+    const classId = req.params.id;
+    const userId = req.userId;
+
+    if (!userId) {
+        return res.status(401).json({
+            "success": false,
+            "error": "Unauthorized",
+        })
+    }
+
     const attendance = await AttendanceModel.findOne({
         classId,
-        studentId : userId,
+        studentId: userId,
     })
 
-    if(attendance){
-        res.json({
-            "success" : true,
-            "data" : {
-                "classId" : classId,
-                "status" : "present" 
+    if (attendance) {
+        return res.json({
+            "success": true,
+            "data": {
+                "classId": classId,
+                "status": "present"
             }
-        }) 
-    } else  {
-        res.json({
-            "success" : true,
-            "data" : {
-                "classId" : classId,
-                "status" : null
+        })
+    } else {
+        return res.json({
+            "success": true,
+            "data": {
+                "classId": classId,
+                "status": null
             }
         })
     }
 })
 
-app.post("/attendence/start",Middleware , TeacherMiddleware)
+app.post("/attendence/start", Middleware, TeacherMiddleware, async (req, res) => {
+    const { success, data } = AttendenceStartSchema.safeParse(req.body);
+    if (!success) {
+        return res.status(400).json({
+            "success": false,
+            "error": "Invalid request Schema",
+        })
+    }
+
+    const classdb = await ClassModel.findOne({
+        _id: data.classId,
+    });
+
+    if (!classdb) {
+        return res.status(404).json({
+            "success": false,
+            "error": "Class not found",
+        });
+    }
+
+    if (!req.userId || !Types.ObjectId.isValid(req.userId as string)) {
+        return res.status(401).json({
+            "success": false,
+            "error": "Unauthorized",
+        });
+    }
+
+    const teacherObjectId = new Types.ObjectId(req.userId as string);
+    if (!classdb.teacherId.equals(teacherObjectId)) {
+        return res.status(403).json({
+            "success": false,
+            "error": "Forbidden",
+        });
+    }
+    activeSession = {
+        classId: classdb._id.toString(),
+        startedAt: new Date(),
+        attendance: {}
+    }
+    return res.json({
+        "success": true,
+        "data": {
+            "classId": classdb._id,
+            "startedAt": activeSession.startedAt,
+        }
+    });
+})
+
+
 app.listen(PORT, () => {
     console.log(`the app is running at the ${PORT}`)
 })
