@@ -1,8 +1,68 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import WebSocket from "ws";
+import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 
 const BASE_URL = process.env.SERVER_URL || "http://localhost:3000";
 const WS_URL = process.env.WS_URL || "ws://localhost:3000/ws";
+
+let serverProcess: ChildProcessWithoutNullStreams | null = null;
+
+async function isServerUp(): Promise<boolean> {
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 500);
+        const res = await fetch(`${BASE_URL}/auth/me`, {
+            method: "GET",
+            headers: { Authorization: "invalid" },
+            signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        // Any HTTP response means the server is reachable.
+        return typeof res.status === "number";
+    } catch {
+        return false;
+    }
+}
+
+async function waitForServerReady(timeoutMs = 10_000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        if (await isServerUp()) return;
+        await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error("Server did not start in time");
+}
+
+beforeAll(async () => {
+    // If you want to run against an externally started server, set:
+    // `E2E_EXTERNAL_SERVER=1`
+    if (process.env.E2E_EXTERNAL_SERVER === "1") return;
+
+    // If server is already up (e.g., running in another terminal), don't spawn.
+    if (await isServerUp()) return;
+
+    const env = {
+        ...process.env,
+        PORT: process.env.PORT || "3000",
+        MONGO_URL: process.env.MONGO_URL || "mongodb://127.0.0.1:27017/live-attendance",
+    };
+
+    serverProcess = spawn("bun", ["run", "index.ts"], {
+        cwd: process.cwd(),
+        env,
+        stdio: "pipe",
+    });
+
+    await waitForServerReady();
+});
+
+afterAll(async () => {
+    if (serverProcess) {
+        serverProcess.kill();
+        serverProcess = null;
+    }
+});
 
 async function request(method: string, path: string, body: any = null, token: string | null = null) {
     const options: any = {

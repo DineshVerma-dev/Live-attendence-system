@@ -29,6 +29,7 @@ const MONGO_URL = process.env.MONGO_URL;
 type AttendanceStatus = "present" | "absent";
 type ActiveSession = {
     classId: string;
+    teacherId: string;
     startedAt: string; // ISO string
     attendance: Record<string, AttendanceStatus>;
 };
@@ -326,6 +327,7 @@ app.post("/attendance/start", Middleware, TeacherMiddleware, async (req, res) =>
 
     activeSession = {
         classId,
+        teacherId: req.userId,
         startedAt: new Date().toISOString(),
         attendance: {},
     };
@@ -348,17 +350,37 @@ const wsError = (ws: WebSocket, message: string) => {
     wsSend(ws, "ERROR", { message });
 };
 
-const broadcast = (wss: WebSocketServer, event: string, data: any) => {
+const broadcastFrom = (wss: WebSocketServer, sender: WebSocket, event: string, data: any) => {
     const payload = JSON.stringify({ event, data });
-    for (const client of wss.clients) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(payload);
-        }
+
+    // Send to the sender immediately.
+    if (sender.readyState === WebSocket.OPEN) {
+        sender.send(payload);
     }
+
+    // Send to everyone else on the next tick.
+    // This avoids a common test flake where the non-sender client receives
+    // a message before its `once('message')` handler is attached.
+    setTimeout(() => {
+        for (const client of wss.clients) {
+            if (client === sender) continue;
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(payload);
+            }
+        }
+    }, 0);
 };
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+const maybeClearActiveSession = () => {
+    // Tests (and typical usage) expect no session to persist
+    // once everyone has disconnected.
+    if (wss.clients.size === 0) {
+        activeSession = null;
+    }
+};
 
 wss.on("connection", (wsRaw, req) => {
     const ws = wsRaw as AuthedWs;
@@ -410,7 +432,7 @@ wss.on("connection", (wsRaw, req) => {
                 wsError(ws, "Forbidden, teacher event only");
                 return;
             }
-            if (!activeSession) {
+            if (!activeSession || activeSession.teacherId !== ws.user.userId) {
                 wsError(ws, "No active attendance session");
                 return;
             }
@@ -423,7 +445,7 @@ wss.on("connection", (wsRaw, req) => {
             }
 
             activeSession.attendance[studentId] = status;
-            broadcast(wss, "ATTENDANCE_MARKED", { studentId, status });
+            broadcastFrom(wss, ws, "ATTENDANCE_MARKED", { studentId, status });
             return;
         }
 
@@ -432,7 +454,7 @@ wss.on("connection", (wsRaw, req) => {
                 wsError(ws, "Forbidden, teacher event only");
                 return;
             }
-            if (!activeSession) {
+            if (!activeSession || activeSession.teacherId !== ws.user.userId) {
                 wsError(ws, "No active attendance session");
                 return;
             }
@@ -442,7 +464,7 @@ wss.on("connection", (wsRaw, req) => {
             const absent = values.filter((v) => v === "absent").length;
             const total = present + absent;
 
-            broadcast(wss, "TODAY_SUMMARY", { present, absent, total });
+            broadcastFrom(wss, ws, "TODAY_SUMMARY", { present, absent, total });
             return;
         }
 
@@ -451,7 +473,7 @@ wss.on("connection", (wsRaw, req) => {
                 wsError(ws, "Forbidden, teacher event only");
                 return;
             }
-            if (!activeSession) {
+            if (!activeSession || activeSession.teacherId !== ws.user.userId) {
                 wsError(ws, "No active attendance session");
                 return;
             }
@@ -497,7 +519,7 @@ wss.on("connection", (wsRaw, req) => {
 
             activeSession = null;
 
-            broadcast(wss, "DONE", {
+            broadcastFrom(wss, ws, "DONE", {
                 message: "Attendance persisted",
                 present,
                 absent,
@@ -517,6 +539,20 @@ wss.on("connection", (wsRaw, req) => {
                 return;
             }
 
+            // Only students enrolled in the active class can query attendance.
+            // This prevents stale sessions from affecting unrelated students.
+            const classDoc = await ClassModel.findById(activeSession.classId).select("studentIds");
+            if (!classDoc) {
+                wsError(ws, "No active attendance session");
+                return;
+            }
+            const studentObjId = new Types.ObjectId(ws.user.userId);
+            const enrolled = classDoc.studentIds.some((id) => id.equals(studentObjId));
+            if (!enrolled) {
+                wsError(ws, "No active attendance session");
+                return;
+            }
+
             const status = activeSession.attendance[ws.user.userId];
             wsSend(ws, "MY_ATTENDANCE", {
                 status: status ? status : "not yet updated",
@@ -526,6 +562,19 @@ wss.on("connection", (wsRaw, req) => {
 
         wsError(ws, "Unknown event");
     });
+
+    const handleDisconnect = () => {
+        // If the teacher who started/controls the session disconnects,
+        // treat the session as ended to avoid stale sessions lingering.
+        if (ws.user?.role === "teacher") {
+            activeSession = null;
+        }
+        // Defer so ws can update wss.clients first.
+        setTimeout(maybeClearActiveSession, 0);
+    };
+
+    ws.on("close", handleDisconnect);
+    ws.on("error", handleDisconnect);
 });
 
 const start = async () => {
