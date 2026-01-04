@@ -27,6 +27,7 @@ const JWT_SECRET =
 const MONGO_URL = process.env.MONGO_URL;
 
 type AttendanceStatus = "present" | "absent";
+
 type ActiveSession = {
     classId: string;
     teacherId: string;
